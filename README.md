@@ -17,17 +17,6 @@ Metadata and posters come from [TMDB](https://www.themoviedb.org/). This product
 4. For TV shows, open a title and tap the seasons you own. The **Missing seasons** tab does the rest.
 5. On **Suggestions**, press *Generate* to fetch recommendations.
 
-## Import a Jellyfin-style folder
-
-On Windows, run the scanner (no installs needed):
-
-```powershell
-.\scripts\Scan-Library.ps1 -MoviesPath E:\Jellyfin_Movies -TvPath E:\Jellyfin_TVshows
-```
-
-It writes `library.json` (git-ignored). In the app: **Settings → Import scan / backup…**. Titles are matched to TMDB automatically, and owned seasons are read from `Season N` folders that contain video files.
-
-Expected layout: `Movies\Title (2015)\file.mkv` and `TV\Show (2015)\Season 1\episode.mkv`.
 
 ## Publish on GitHub Pages
 
