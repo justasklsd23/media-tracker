@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Media Tracker</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>🎬 Media Tracker</h1>
+  <nav id="tabs">
+    <button data-tab="library" class="active">Library</button>
+    <button data-tab="missing">Missing seasons <span id="missingCount" class="pill"></span></button>
+    <button data-tab="suggestions">Suggestions</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+  <button id="addBtn" class="primary">+ Add</button>
+</header>
+
+<div id="status" hidden></div>
+<main id="view"></main>
+
+<dialog id="addDialog">
+  <form method="dialog" class="dlg-head"><h2>Add a movie or show</h2><button aria-label="Close">✕</button></form>
+  <input id="searchInput" type="search" placeholder="Search TMDB…" autocomplete="off">
+  <div id="searchResults" class="results"></div>
+</dialog>
+
+<dialog id="itemDialog"></dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
