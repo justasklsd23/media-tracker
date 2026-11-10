@@ -21,9 +21,9 @@ Metadata and posters come from [TMDB](https://www.themoviedb.org/). This product
 
 ## Share it with family and friends (phone app + read-only view)
 
-The app is an installable web app. Open your github.io link on a phone, then:
+It's a plain website, so a home-screen shortcut is just a link that opens it in the browser. Open your github.io link on a phone, then:
 - **iPhone:** Safari → Share → *Add to Home Screen*
-- **Android:** Chrome menu → *Install app* / *Add to Home Screen*
+- **Android:** Chrome menu → *Add to Home screen* (choose *Create shortcut* if asked)
 
 Anyone who opens the link with no library of their own sees your published snapshot, read-only (no editing, no keys). To publish or refresh it:
 

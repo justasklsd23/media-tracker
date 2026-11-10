@@ -646,6 +646,9 @@ async function boot() {
 }
 boot();
 
-if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+// Clean up the offline worker from earlier versions (see sw.js).
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations()
+    .then(rs => rs.forEach(r => r.update().catch(() => {})))
+    .catch(() => {});
 }
