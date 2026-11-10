@@ -13,6 +13,7 @@
     <button data-tab="library" class="active">Library</button>
     <button data-tab="missing">Missing seasons <span id="missingCount" class="pill"></span></button>
     <button data-tab="suggestions">Suggestions</button>
+    <button data-tab="vinyl">Vinyl</button>
     <button data-tab="settings">Settings</button>
   </nav>
   <button id="addBtn" class="primary">+ Add</button>
@@ -22,7 +23,7 @@
 <main id="view"></main>
 
 <dialog id="addDialog">
-  <form method="dialog" class="dlg-head"><h2>Add a movie or show</h2><button aria-label="Close">✕</button></form>
+  <form method="dialog" class="dlg-head"><h2 id="addTitle">Add a movie or show</h2><button aria-label="Close">✕</button></form>
   <input id="searchInput" type="search" placeholder="Search TMDB…" autocomplete="off">
   <div id="searchResults" class="results"></div>
 </dialog>

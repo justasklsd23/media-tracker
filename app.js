@@ -13,9 +13,9 @@ const filters = { q: '', type: 'all', status: 'all', sort: 'title' };
 function load() {
   try {
     const s = JSON.parse(localStorage.getItem(LS_KEY));
-    if (s) return { apiKey: '', items: [], dismissed: [], recCache: {}, ...s };
+    if (s) return { apiKey: '', items: [], vinyl: [], dismissed: [], recCache: {}, ...s };
   } catch {}
-  return { apiKey: '', items: [], dismissed: [], recCache: {} };
+  return { apiKey: '', items: [], vinyl: [], dismissed: [], recCache: {} };
 }
 function save() {
   try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) { setStatus('Could not save: ' + e.message); }
@@ -149,7 +149,7 @@ function render() {
   const n = missingShows().length;
   $('#missingCount').textContent = n || '';
   const v = $('#view');
-  ({ library: renderLibrary, missing: renderMissing, suggestions: renderSuggestions, settings: renderSettings })[tab](v);
+  ({ library: renderLibrary, missing: renderMissing, suggestions: renderSuggestions, vinyl: renderVinyl, settings: renderSettings })[tab](v);
 }
 
 function renderLibrary(v) {
@@ -292,14 +292,35 @@ async function importFile(file) {
   if (data.items) { // backup restore
     const have = new Set(state.items.map(i => i.key));
     for (const i of data.items) if (!have.has(i.key)) state.items.push(i);
+    const haveV = new Set(state.vinyl.map(v => v.key));
+    for (const v of data.vinyl || []) if (!haveV.has(v.key)) state.vinyl.push(v);
     state.dismissed = [...new Set([...state.dismissed, ...(data.dismissed || [])])];
     save(); setStatus(''); return render();
   }
   const entries = [...(data.movies || []).map(e => ({ ...e, type: 'movie' })), ...(data.tv || []).map(e => ({ ...e, type: 'tv' }))];
-  try { await tmdb('/configuration'); } catch (e) { return setStatus('Import stopped: ' + e.message + ' Save a valid key in Settings, then import again.'); }
+  // Titles already in the library only get their owned seasons updated (no TMDB calls); the rest are new.
+  const srcOf = e => `${e.type}|${norm(e.title)}|${e.year || ''}`;
+  const bySrc = new Map(state.items.filter(i => i.src).map(i => [i.src, i]));
+  const todo = [];
+  let updated = 0;
+  for (const e of entries) {
+    const have = bySrc.get(srcOf(e)) || state.items.find(i => i.type === e.type && norm(i.title) === norm(e.title) && (!e.year || String(i.year) === String(e.year)));
+    if (!have) { todo.push(e); continue; }
+    have.src ||= srcOf(e);
+    let changed = have.status !== 'owned';
+    have.status = 'owned';
+    if (e.type === 'tv') {
+      const merged = [...new Set([...(have.ownedSeasons || []), ...(e.seasons || [])])].sort((a, b) => a - b);
+      changed ||= merged.length !== (have.ownedSeasons || []).length;
+      have.ownedSeasons = merged;
+    }
+    if (changed) updated++;
+  }
+  save();
+  if (todo.length) {
+    try { await tmdb('/configuration'); } catch (e) { return setStatus('Import stopped: ' + e.message + ' Save a valid key in Settings, then import again.'); }
+  }
   let matched = 0, unmatched = 0;
-  const known = new Set(state.items.map(i => i.type + norm(i.title) + (i.year || '')));
-  const todo = entries.filter(e => !known.has(e.type + norm(e.title) + (e.year || '')));
   const tasks = todo.map(e => async () => {
     let item;
     const res = await matchOne(e, e.type).catch(() => null);
@@ -313,16 +334,17 @@ async function importFile(file) {
       if (!find(item.key)) state.items.push(item);
     }
     item.status = 'owned';
+    item.src = srcOf(e);
     if (e.type === 'tv') item.ownedSeasons = [...new Set([...(item.ownedSeasons || []), ...(e.seasons || [])])].sort((a, b) => a - b);
   });
   await pool(tasks, 4, (d, t) => setStatus(`Importing… ${d}/${t}`));
-  save(); $('#file').value = '';
-  setStatus(`Imported ${todo.length} titles: ${matched} matched, ${unmatched} unmatched (use “Match unmatched titles” to retry).`);
+  save(); const f = $('#file'); if (f) f.value = '';
+  setStatus(`${todo.length} new titles (${matched} matched, ${unmatched} unmatched), ${updated} existing titles updated.`);
   setTimeout(() => setStatus(''), 8000); render();
 }
 
 function exportBackup() {
-  const blob = new Blob([JSON.stringify({ items: state.items, dismissed: state.dismissed }, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify({ items: state.items, vinyl: state.vinyl, dismissed: state.dismissed }, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `media-tracker-backup-${today()}.json`;
@@ -344,6 +366,106 @@ async function refreshAll(onlyUnmatched) {
   await pool(tasks, 4, (d, t) => setStatus(`Refreshing… ${d}/${t}`));
   state.items = state.items.filter(i => !i._dup);
   save(); setStatus('Done.'); setTimeout(() => setStatus(''), 2000); render();
+}
+
+/* ---------- Vinyl (MusicBrainz + Cover Art Archive, no key needed) ---------- */
+const vinylFilters = { q: '', status: 'all', sort: 'artist' };
+const cover = v => v.mbid
+  ? `<img loading="lazy" src="https://coverartarchive.org/release-group/${esc(v.mbid)}/front-250" alt="${esc(v.title)}" data-fallback="${esc(v.title)}">`
+  : `<div class="noposter">${esc(v.title)}</div>`;
+const findVinyl = key => state.vinyl.find(v => v.key === key);
+
+// Cover Art Archive returns 404 for releases without art: swap in a text placeholder.
+document.addEventListener('error', e => {
+  const img = e.target;
+  if (img.tagName !== 'IMG' || img.dataset.fallback === undefined) return;
+  const d = document.createElement('div');
+  d.className = 'noposter';
+  d.textContent = img.dataset.fallback;
+  img.replaceWith(d);
+}, true);
+
+function vinylCard(v) {
+  return `<div class="card" data-action="open-vinyl" data-key="${esc(v.key)}">${cover(v)}
+    <div class="meta"><div class="title">${esc(v.title)}</div>
+    <div class="sub">${esc(v.artist)}${v.year ? ' · ' + esc(v.year) : ''}</div>
+    <div>${v.status === 'wishlist' ? '<span class="badge">Wishlist</span>' : ''}</div></div></div>`;
+}
+
+function renderVinyl(v) {
+  const f = vinylFilters;
+  const items = state.vinyl.filter(r => (f.status === 'all' || r.status === f.status) &&
+    (!f.q || norm(r.artist + ' ' + r.title).includes(norm(f.q))));
+  const sorters = {
+    artist: (a, b) => a.artist.localeCompare(b.artist) || (a.year || '').localeCompare(b.year || ''),
+    title: (a, b) => a.title.localeCompare(b.title),
+    year: (a, b) => (b.year || '').localeCompare(a.year || ''),
+    added: (a, b) => b.addedAt - a.addedAt,
+  };
+  items.sort(sorters[f.sort]);
+  const opt = (val, cur, label) => `<option value="${val}"${val === cur ? ' selected' : ''}>${label}</option>`;
+  const owned = state.vinyl.filter(r => r.status === 'owned').length;
+  v.innerHTML = `<div class="toolbar">
+    <input type="search" id="vq" placeholder="Filter records…" value="${esc(f.q)}">
+    <select id="vstatus">${opt('all', f.status, 'Owned & wishlist')}${opt('owned', f.status, 'Owned')}${opt('wishlist', f.status, 'Wishlist')}</select>
+    <select id="vsort">${opt('artist', f.sort, 'Sort: artist')}${opt('title', f.sort, 'Sort: title')}${opt('year', f.sort, 'Sort: year')}${opt('added', f.sort, 'Sort: recently added')}</select>
+  </div>
+  <div class="sub" style="margin-bottom:12px">${owned} records owned · ${state.vinyl.length - owned} on wishlist. Use “+ Add” to search MusicBrainz.</div>
+  ${items.length ? `<div class="grid">${items.map(vinylCard).join('')}</div>`
+    : `<div class="empty">${state.vinyl.length ? 'Nothing matches.' : 'No records yet. Use “+ Add” to search for an album.'}</div>`}`;
+  $('#vq').oninput = e => { f.q = e.target.value; const pos = e.target.selectionStart; renderVinyl(v); const q = $('#vq'); q.focus(); q.setSelectionRange(pos, pos); };
+  $('#vstatus').onchange = e => { f.status = e.target.value; render(); };
+  $('#vsort').onchange = e => { f.sort = e.target.value; render(); };
+}
+
+function openVinyl(key) {
+  const r = findVinyl(key);
+  if (!r) return;
+  const d = $('#itemDialog');
+  d.innerHTML = `<form method="dialog" class="dlg-head"><h2>${esc(r.title)}</h2><button aria-label="Close">✕</button></form>
+    <div class="detail">${cover(r)}<div>
+      <p><strong>${esc(r.artist)}</strong>${r.year ? ` <span class="sub">(${esc(r.year)})</span>` : ''}</p>
+      <p class="sub">${r.status === 'owned' ? 'In your collection' : 'On your wishlist'}</p>
+      <label class="sub" for="vnotes">Notes (pressing, condition, where you bought it…)</label>
+      <textarea id="vnotes" rows="4" style="width:100%" data-key="${esc(key)}">${esc(r.notes || '')}</textarea></div></div>
+    <div class="actions" style="margin-top:14px">
+      <button data-action="v-status" data-key="${esc(key)}">Move to ${r.status === 'owned' ? 'wishlist' : 'owned'}</button>
+      ${r.mbid ? `<a href="https://musicbrainz.org/release-group/${esc(r.mbid)}" target="_blank" rel="noopener"><button type="button">MusicBrainz ↗</button></a>` : ''}
+      <button class="danger" data-action="v-remove" data-key="${esc(key)}">Remove</button></div>`;
+  if (!d.open) d.showModal();
+}
+
+async function searchVinyl(q) {
+  const out = $('#searchResults');
+  const clean = q.replace(/[+\-&|!(){}\[\]^"~*?:\\\/]/g, ' ').trim();
+  if (!clean) { out.innerHTML = ''; return; }
+  try {
+    const url = `https://musicbrainz.org/ws/2/release-group?fmt=json&limit=12&query=${encodeURIComponent(`releasegroup:(${clean}) OR artist:(${clean})`)}`;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(r.status === 503 ? 'MusicBrainz is busy, try again in a moment.' : `MusicBrainz error ${r.status}`);
+    const rs = ((await r.json())['release-groups'] || []).map(g => ({
+      mbid: g.id, title: g.title, year: (g['first-release-date'] || '').slice(0, 4),
+      artist: (g['artist-credit'] || []).map(a => a.name + (a.joinphrase || '')).join('') || 'Unknown artist',
+      kind: [g['primary-type'], ...(g['secondary-types'] || [])].filter(Boolean).join(' + '),
+    }));
+    out._vinyl = rs;
+    out.innerHTML = rs.map((x, n) => {
+      const have = findVinyl('vinyl:' + x.mbid);
+      return `<div class="result">${cover(x)}
+        <div class="info"><div class="title">${esc(x.title)}</div>
+        <div class="sub">${esc(x.artist)}${x.year ? ' · ' + esc(x.year) : ''}${x.kind ? ' · ' + esc(x.kind) : ''}${have ? ' · in collection (' + have.status + ')' : ''}</div></div>
+        <div class="actions"><button data-action="v-add" data-status="owned" data-n="${n}">I own it</button>
+        <button data-action="v-add" data-status="wishlist" data-n="${n}">Wishlist</button></div></div>`;
+    }).join('') + '<div class="actions"><button data-action="v-manual">Can’t find it? Add manually</button></div>';
+  } catch (e) { out.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+function addVinylManual() {
+  const artist = prompt('Artist:'); if (!artist) return;
+  const title = prompt('Album title:'); if (!title) return;
+  const year = prompt('Year (optional):') || '';
+  state.vinyl.push({ key: `vinyl:local:${Date.now()}`, mbid: '', artist: artist.trim(), title: title.trim(), year: year.trim(), status: 'owned', notes: '', addedAt: Date.now() });
+  save(); render();
 }
 
 /* ---------- Dialogs ---------- */
@@ -423,6 +545,19 @@ document.addEventListener('click', async e => {
       await addItem({ id: s.tmdbId, title: s.title, name: s.title, release_date: s.year ? s.year + '-01-01' : '', poster_path: s.poster, overview: s.overview, vote_average: s.vote }, s.type, t.dataset.status);
       render(); break;
     }
+    case 'open-vinyl': openVinyl(key); break;
+    case 'v-status': { const r = findVinyl(key); r.status = r.status === 'owned' ? 'wishlist' : 'owned'; save(); openVinyl(key); render(); break; }
+    case 'v-remove': {
+      const r = findVinyl(key);
+      if (confirm(`Remove “${r.title}” by ${r.artist}?`)) { state.vinyl = state.vinyl.filter(x => x !== r); save(); $('#itemDialog').close(); render(); }
+      break;
+    }
+    case 'v-add': {
+      const x = $('#searchResults')._vinyl[+t.dataset.n];
+      if (!findVinyl('vinyl:' + x.mbid)) state.vinyl.push({ key: 'vinyl:' + x.mbid, mbid: x.mbid, artist: x.artist, title: x.title, year: x.year, status: t.dataset.status, notes: '', addedAt: Date.now() });
+      save(); t.textContent = '✓ Added'; t.disabled = true; break;
+    }
+    case 'v-manual': addVinylManual(); break;
     case 'sug-dismiss': state.dismissed.push(key); save(); render(); break;
     case 'gen-sug': generateSuggestions().catch(err => setStatus(err.message)); break;
     case 'save-key': state.apiKey = $('#apiKey').value.trim(); save(); setStatus('Key saved.'); setTimeout(() => setStatus(''), 1500); break;
@@ -430,13 +565,31 @@ document.addEventListener('click', async e => {
     case 'export': exportBackup(); break;
     case 'refresh-all': refreshAll(false).catch(err => setStatus(err.message)); break;
     case 'match': refreshAll(true).catch(err => setStatus(err.message)); break;
-    case 'wipe': if (confirm('Delete ALL library data from this browser?')) { state = { apiKey: state.apiKey, items: [], dismissed: [], recCache: {} }; save(); render(); } break;
+    case 'wipe': if (confirm('Delete ALL library data from this browser?')) { state = { apiKey: state.apiKey, items: [], vinyl: [], dismissed: [], recCache: {} }; save(); render(); } break;
   }
 });
 
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { tab = b.dataset.tab; render(); } });
-$('#addBtn').onclick = () => { $('#addDialog').showModal(); $('#searchInput').focus(); };
-$('#searchInput').oninput = e => { clearTimeout(searchTimer); searchTimer = setTimeout(() => doSearch(e.target.value), 300); };
+let addMode = 'media';
+$('#addBtn').onclick = () => {
+  addMode = tab === 'vinyl' ? 'vinyl' : 'media';
+  $('#addTitle').textContent = addMode === 'vinyl' ? 'Add a vinyl record' : 'Add a movie or show';
+  $('#searchInput').placeholder = addMode === 'vinyl' ? 'Search by artist or album (MusicBrainz)…' : 'Search TMDB…';
+  $('#searchInput').value = '';
+  $('#searchResults').innerHTML = '';
+  $('#addDialog').showModal();
+  $('#searchInput').focus();
+};
+$('#searchInput').oninput = e => {
+  clearTimeout(searchTimer);
+  const vinyl = addMode === 'vinyl'; // MusicBrainz asks for ~1 request/second
+  searchTimer = setTimeout(() => (vinyl ? searchVinyl : doSearch)(e.target.value), vinyl ? 700 : 300);
+};
+document.addEventListener('change', e => {
+  if (e.target.id !== 'vnotes') return;
+  const r = findVinyl(e.target.dataset.key);
+  if (r) { r.notes = e.target.value; save(); }
+});
 $('#addDialog').addEventListener('close', () => render());
 $('#itemDialog').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
 
