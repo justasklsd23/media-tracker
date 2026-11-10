@@ -19,6 +19,20 @@ Metadata and posters come from [TMDB](https://www.themoviedb.org/). This product
 5. On **Suggestions**, press *Generate* to fetch recommendations.
 6. On **Vinyl**, press **+ Add**, search an artist or album, and mark it owned or wishlist. Add notes (pressing, condition) by opening a record.
 
+## Share it with family and friends (phone app + read-only view)
+
+The app is an installable web app. Open your github.io link on a phone, then:
+- **iPhone:** Safari → Share → *Add to Home Screen*
+- **Android:** Chrome menu → *Install app* / *Add to Home Screen*
+
+Anyone who opens the link with no library of their own sees your published snapshot, read-only (no editing, no keys). To publish or refresh it:
+
+1. In the app (on your own copy): **Settings → Export shared snapshot**.
+2. Run `scripts\Publish-Snapshot.ps1`. It moves the file to `shared\library.json` in this repo.
+3. Commit and push with GitHub Desktop. Within a few minutes the shared view updates.
+
+The snapshot contains your titles, posters, owned seasons, wishlist and vinyl. It leaves out your API key, hidden suggestions and vinyl notes. **Anyone with the link can see it**, so only publish what you're happy to share. On a new device, "Manage my own library" at the bottom of the shared view switches to the editable app.
+
 ## Keep it up to date
 
 A web page can't read your hard drive, so after adding movies or shows, rescan:

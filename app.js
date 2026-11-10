@@ -8,6 +8,9 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 let state = load();
 let tab = 'library';
+let viewer = false;       // true when showing the published read-only snapshot
+let sharedUpdated = '';
+const OWNER_FLAG = 'mediatracker.owner';
 const filters = { q: '', type: 'all', status: 'all', sort: 'title' };
 
 function load() {
@@ -18,6 +21,7 @@ function load() {
   return { apiKey: '', items: [], vinyl: [], dismissed: [], recCache: {} };
 }
 function save() {
+  if (viewer) return;
   try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) { setStatus('Could not save: ' + e.message); }
 }
 
@@ -150,6 +154,12 @@ function render() {
   $('#missingCount').textContent = n || '';
   const v = $('#view');
   ({ library: renderLibrary, missing: renderMissing, suggestions: renderSuggestions, vinyl: renderVinyl, settings: renderSettings })[tab](v);
+  const note = $('#viewerNote');
+  note.hidden = !viewer;
+  if (viewer) {
+    const when = sharedUpdated ? new Date(sharedUpdated).toLocaleDateString() : '';
+    note.innerHTML = `Shared library${when ? ' · updated ' + esc(when) : ''} · <a data-action="own-mode">Manage my own library</a>`;
+  }
 }
 
 function renderLibrary(v) {
@@ -213,6 +223,7 @@ function renderSettings(v) {
     <div class="row">
       <button data-action="import">Import scan / backup…</button>
       <button data-action="export">Export backup</button>
+      <button data-action="export-shared">Export shared snapshot</button>
       <button data-action="refresh-all">Refresh all from TMDB</button>
       <button data-action="match">Match unmatched titles</button>
       <button class="danger" data-action="wipe">Delete all data</button>
@@ -343,13 +354,28 @@ async function importFile(file) {
   setTimeout(() => setStatus(''), 8000); render();
 }
 
-function exportBackup() {
-  const blob = new Blob([JSON.stringify({ items: state.items, vinyl: state.vinyl, dismissed: state.dismissed }, null, 2)], { type: 'application/json' });
+function download(name, text) {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `media-tracker-backup-${today()}.json`;
+  a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+function exportBackup() {
+  download(`media-tracker-backup-${today()}.json`, JSON.stringify({ items: state.items, vinyl: state.vinyl, dismissed: state.dismissed }, null, 2));
+}
+
+// Public, read-only snapshot for family/friends. Leaves out the API key, hidden suggestions and vinyl notes.
+function exportShared() {
+  const data = {
+    version: 1, updated: new Date().toISOString(),
+    items: state.items.map(({ src, ...i }) => i),
+    vinyl: state.vinyl.map(({ notes, ...v }) => v),
+  };
+  download('media-tracker-shared.json', JSON.stringify(data));
+  setStatus('Saved media-tracker-shared.json — run scripts\\Publish-Snapshot.ps1 to put it in the repo.');
+  setTimeout(() => setStatus(''), 8000);
 }
 
 async function refreshAll(onlyUnmatched) {
@@ -426,8 +452,8 @@ function openVinyl(key) {
     <div class="detail">${cover(r)}<div>
       <p><strong>${esc(r.artist)}</strong>${r.year ? ` <span class="sub">(${esc(r.year)})</span>` : ''}</p>
       <p class="sub">${r.status === 'owned' ? 'In your collection' : 'On your wishlist'}</p>
-      <label class="sub" for="vnotes">Notes (pressing, condition, where you bought it…)</label>
-      <textarea id="vnotes" rows="4" style="width:100%" data-key="${esc(key)}">${esc(r.notes || '')}</textarea></div></div>
+      ${viewer ? '' : `<label class="sub" for="vnotes">Notes (pressing, condition, where you bought it…)</label>
+      <textarea id="vnotes" rows="4" style="width:100%" data-key="${esc(key)}">${esc(r.notes || '')}</textarea>`}</div></div>
     <div class="actions" style="margin-top:14px">
       <button data-action="v-status" data-key="${esc(key)}">Move to ${r.status === 'owned' ? 'wishlist' : 'owned'}</button>
       ${r.mbid ? `<a href="https://musicbrainz.org/release-group/${esc(r.mbid)}" target="_blank" rel="noopener"><button type="button">MusicBrainz ↗</button></a>` : ''}
@@ -519,6 +545,7 @@ document.addEventListener('click', async e => {
   const t = e.target.closest('[data-action]');
   if (!t) return;
   const { action, key } = t.dataset;
+  if (viewer && !['open', 'open-vinyl', 'own-mode'].includes(action)) return;
   const item = key && find(key);
   switch (action) {
     case 'open': openItem(key); break;
@@ -546,6 +573,10 @@ document.addEventListener('click', async e => {
       render(); break;
     }
     case 'open-vinyl': openVinyl(key); break;
+    case 'own-mode':
+      try { localStorage.setItem(OWNER_FLAG, '1'); } catch {}
+      location.reload(); break;
+    case 'export-shared': exportShared(); break;
     case 'v-status': { const r = findVinyl(key); r.status = r.status === 'owned' ? 'wishlist' : 'owned'; save(); openVinyl(key); render(); break; }
     case 'v-remove': {
       const r = findVinyl(key);
@@ -593,5 +624,28 @@ document.addEventListener('change', e => {
 $('#addDialog').addEventListener('close', () => render());
 $('#itemDialog').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
 
-if (!state.apiKey) tab = 'settings';
-render();
+// A visitor with no library of their own sees the published snapshot, read-only.
+async function boot() {
+  let owner = false;
+  try { owner = localStorage.getItem(OWNER_FLAG) === '1'; } catch {}
+  const hasLocal = state.items.length || state.vinyl.length || state.apiKey;
+  if (!hasLocal && !owner) {
+    try {
+      const r = await fetch('shared/library.json', { cache: 'no-cache' });
+      if (r.ok) {
+        const d = await r.json();
+        state = { apiKey: '', items: d.items || [], vinyl: d.vinyl || [], dismissed: [], recCache: {} };
+        sharedUpdated = d.updated || '';
+        viewer = true;
+        document.body.classList.add('viewer');
+      }
+    } catch {}
+  }
+  if (!viewer && !state.apiKey) tab = 'settings';
+  render();
+}
+boot();
+
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}

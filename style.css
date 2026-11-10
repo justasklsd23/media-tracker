@@ -63,4 +63,9 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
 .settings label { display: block; margin: 12px 0 4px; font-weight: 600; }
 .settings input[type=password], .settings input[type=text] { width: 100%; }
 .settings .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+/* Read-only shared view */
+.viewer #addBtn, .viewer [data-tab="suggestions"], .viewer [data-tab="settings"], .viewer dialog .actions { display: none; }
+.viewer .chip { pointer-events: none; }
+#viewerNote { text-align: center; color: var(--muted); font-size: 13px; padding: 24px 16px 32px; }
+#viewerNote a { color: var(--accent); cursor: pointer; }
 @media (max-width: 520px) { .grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); } }
