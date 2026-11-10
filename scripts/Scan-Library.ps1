@@ -12,8 +12,15 @@
 param(
   [string]$MoviesPath = 'E:\Jellyfin_Movies',
   [string]$TvPath     = 'E:\Jellyfin_TVshows',
-  [string]$Out        = (Join-Path $PSScriptRoot '..\library.json')
+  [string]$Out        = ''
 )
+
+# Default output: ..\library.json next to this script. If the code was pasted into a console
+# (no script location), fall back to the project folder so it never writes to the wrong place.
+if (-not $Out) {
+  $base = if ($PSScriptRoot) { Join-Path $PSScriptRoot '..' } else { 'E:\media-tracker' }
+  $Out = Join-Path $base 'library.json'
+}
 
 $video = '.mkv', '.mp4', '.m4v', '.avi', '.mov', '.wmv', '.ts', '.m2ts', '.iso'
 
