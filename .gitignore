@@ -1,2 +1,4 @@
 /library.json
+scripts/sync.log
+scripts/.tmdb-key
 media-tracker-backup-*.json

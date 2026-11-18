@@ -33,7 +33,20 @@ Anyone who opens the link with no library of their own sees your published snaps
 
 The snapshot contains your titles, posters, owned seasons, wishlist and vinyl. It leaves out your API key, hidden suggestions and vinyl notes. **Anyone with the link can see it**, so only publish what you're happy to share. On a new device, "Manage my own library" at the bottom of the shared view switches to the editable app.
 
-## Keep it up to date
+## Fully automatic updates (Windows)
+
+`scripts\Sync-Site.ps1` does everything in one go: scans your Jellyfin folders, matches new titles on TMDB, refreshes season data for your shows, rewrites `shared\library.json`, then commits and pushes it. If nothing changed it does nothing. Wishlist and vinyl entries already in the snapshot are preserved.
+
+One-time setup:
+1. Give it your TMDB key without putting it in the repo, in PowerShell: `setx TMDB_API_KEY "your-key"` (then open a new window).
+2. Try it: `.\scripts\Sync-Site.ps1 -DryRun` (writes nothing), then `.\scripts\Sync-Site.ps1`. The first real run may open a GitHub sign-in window; sign in once.
+3. Schedule it daily: `.\scripts\Register-SyncTask.ps1 -Time 03:00`. If the PC is off at that time, it runs when the PC is next on. The task runs while you're signed in to Windows.
+
+Progress and errors are written to `scripts\sync.log` (git-ignored). Remove the schedule with `Unregister-ScheduledTask -TaskName MediaTrackerSync -Confirm:$false`.
+
+Vinyl records and wishlist items are added in the app and live in your browser, so those still need **Settings → Export shared snapshot** + `Publish-Snapshot.ps1` when you change them.
+
+## Keep it up to date (manual)
 
 A web page can't read your hard drive, so after adding movies or shows, rescan:
 
