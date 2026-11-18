@@ -40,25 +40,26 @@ function Src($e, [string]$type) { "$type|$(Norm $e.title)|$($e.year)" }
 function NowMs { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
 
 # ---- TMDB ----
-$script:Key = $env:TMDB_API_KEY
-if (-not $script:Key) { $script:Key = [Environment]::GetEnvironmentVariable('TMDB_API_KEY', 'User') }
-if (-not $script:Key) {
+# Prefer the saved (user-level) value: a PowerShell window opened before `setx` still holds the old one.
+$script:TmdbKey = [Environment]::GetEnvironmentVariable('TMDB_API_KEY', 'User')
+if (-not $script:TmdbKey) { $script:TmdbKey = $env:TMDB_API_KEY }
+if (-not $script:TmdbKey) {
   $kf = Join-Path $PSScriptRoot '.tmdb-key'
-  if (Test-Path $kf) { $script:Key = (Get-Content $kf -Raw).Trim() }
+  if (Test-Path $kf) { $script:TmdbKey = (Get-Content $kf -Raw).Trim() }
 }
 
 function Invoke-Tmdb([string]$Path, [hashtable]$Query = @{}) {
   $uri = "https://api.themoviedb.org/3$Path"
   $headers = @{}
   $q = $Query.Clone()
-  if ($script:Key.Length -gt 40) { $headers.Authorization = "Bearer $($script:Key)" } else { $q.api_key = $script:Key }
+  if ($script:TmdbKey.Length -gt 40) { $headers.Authorization = "Bearer $($script:TmdbKey)" } else { $q.api_key = $script:TmdbKey }
   $qs = ($q.GetEnumerator() | ForEach-Object { '{0}={1}' -f $_.Key, [uri]::EscapeDataString([string]$_.Value) }) -join '&'
   if ($qs) { $uri += "?$qs" }
   for ($try = 1; $try -le 3; $try++) {
     try { return Invoke-RestMethod -Uri $uri -Headers $headers -TimeoutSec 30 }
     catch {
       $code = $_.Exception.Response.StatusCode.value__
-      if ($code -eq 401) { throw 'TMDB rejected the API key.' }
+      if ($code -eq 401) { throw "TMDB returned 401 for $Path ($($_.ErrorDetails.Message))" }
       if ($try -eq 3) { throw }
       Start-Sleep -Seconds (2 * $try)
     }
@@ -84,11 +85,11 @@ function Merge-Seasons($item, $seasons) {
 
 # ---- Git ----
 function Get-GitPath {
-  $c = Get-Command git -ErrorAction SilentlyContinue
-  if ($c) { return $c.Source }
+  $c = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($c) { return [string]$c.Source }
   $d = Get-ChildItem "$env:LOCALAPPDATA\GitHubDesktop\app-*\resources\app\git\cmd\git.exe" -ErrorAction SilentlyContinue |
     Sort-Object FullName -Descending | Select-Object -First 1
-  if ($d) { return $d.FullName }
+  if ($d) { return [string]$d.FullName }
   throw 'Git not found. Install Git or GitHub Desktop.'
 }
 function Git { & $script:GitExe -C $RepoPath @args; if ($LASTEXITCODE -ne 0) { throw "git $($args -join ' ') failed (exit $LASTEXITCODE)" } }
@@ -128,7 +129,7 @@ try {
     }
 
     if (-not $have) {
-      if (-not $script:Key) { $skipped++; continue }
+      if (-not $script:TmdbKey) { $skipped++; continue }
       $q = @{ query = $e.title }
       if ($e.year) { $q[$(if ($type -eq 'tv') { 'first_air_date_year' } else { 'year' })] = $e.year }
       $res = @((Invoke-Tmdb "/search/$type" $q).results)
@@ -172,7 +173,7 @@ try {
 
   # ---- Refresh season data for shows (so newly aired seasons show up as missing) ----
   $refreshed = 0
-  if ($script:Key) {
+  if ($script:TmdbKey) {
     $cutoff = [DateTimeOffset]::UtcNow.AddDays(-$RefreshDays).ToUnixTimeMilliseconds()
     foreach ($i in $items) {
       if ($i.type -ne 'tv' -or -not $i.tmdbId) { continue }
@@ -184,7 +185,14 @@ try {
 
   # ---- Write snapshot if anything changed ----
   $after = ConvertTo-Json @($items) -Depth 20 -Compress
-  if ($before -eq $after) { Log "No changes. ($($items.Count) titles)"; return }
+  if ($before -eq $after) {
+    Log "No changes. ($($items.Count) titles)"
+    if (-not $DryRun -and -not $NoPush) {   # push any earlier commit that never made it to GitHub
+      $ahead = [int](& $script:GitExe -C $RepoPath rev-list --count '@{u}..HEAD')
+      if ($ahead -gt 0) { Git push --quiet; Log "Pushed $ahead earlier commit(s)." }
+    }
+    return
+  }
   Log "Changes: $added added, $unmatched unmatched, $refreshed shows refreshed. ($($items.Count) titles)"
   if ($DryRun) { Log 'Dry run: nothing written.'; return }
 
