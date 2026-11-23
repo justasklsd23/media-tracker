@@ -5,6 +5,7 @@ A small, dependency-free web app to track the movies and TV shows you own.
 - **Library** – movies and shows, owned or on your wishlist
 - **Missing seasons** – compares the seasons you own with the seasons TMDB says have aired
 - **Suggestions** – "you might like" picks based on your library, plus missing movies from franchises you already own
+- **Music** – your digital music library (`Artist\Album (Year)\tracks`), grouped by artist, kept up to date automatically by the sync script
 - **Vinyl** – your record collection and wishlist, searched via [MusicBrainz](https://musicbrainz.org/) with covers from the Cover Art Archive (no key needed)
 - **Private** – your data lives in your browser's localStorage; nothing is uploaded anywhere. Export/import JSON backups.
 
@@ -43,6 +44,8 @@ One-time setup:
 3. Schedule it daily: `.\scripts\Register-SyncTask.ps1 -Time 03:00`. If the PC is off at that time, it runs when the PC is next on. The task runs while you're signed in to Windows.
 
 Progress and errors are written to `scripts\sync.log` (git-ignored). Remove the schedule with `Unregister-ScheduledTask -TaskName MediaTrackerSync -Confirm:$false`.
+
+The same run also updates the **Music** tab from `E:\Jellyfin_Music\LoadedtoServer` (change it with `-MusicPath`). Albums are matched on MusicBrainz for covers, at most 200 new albums per run (about a second each), so a large collection fills in over a few days. The music list mirrors the disk, so renamed or removed albums disappear on the next run.
 
 Vinyl records and wishlist items are added in the app and live in your browser, so those still need **Settings → Export shared snapshot** + `Publish-Snapshot.ps1` when you change them.
 

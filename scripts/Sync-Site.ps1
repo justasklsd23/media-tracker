@@ -18,8 +18,10 @@
 param(
   [string]$MoviesPath = 'E:\Jellyfin_Movies',
   [string]$TvPath     = 'E:\Jellyfin_TVshows',
+  [string]$MusicPath  = 'E:\Jellyfin_Music\LoadedtoServer',
   [string]$RepoPath   = (Join-Path $PSScriptRoot '..'),
   [int]$RefreshDays   = 7,
+  [int]$MaxMusicLookups = 200,   # MusicBrainz is ~1 request/second; the rest is picked up on the next run
   [switch]$DryRun,
   [switch]$NoPush,
   [switch]$Unattended
@@ -83,6 +85,37 @@ function Merge-Seasons($item, $seasons) {
   $item.ownedSeasons = @(@($item.ownedSeasons) + @($seasons) | Where-Object { $null -ne $_ } | ForEach-Object { [int]$_ } | Sort-Object -Unique)
 }
 
+# ---- MusicBrainz (no key; asks for ~1 request/second and a descriptive User-Agent) ----
+$script:MbAgent = 'MediaTracker/1.0 (https://github.com/justasklsd23/media-tracker)'
+function Esc-Lucene([string]$s) { ([regex]::Replace($s, '[+\-&|!(){}\[\]^"~*?:\\/]', ' ')).Trim() }
+
+function Find-MusicBrainz([string]$artist, [string]$album) {
+  $query = 'releasegroup:"{0}" AND artist:"{1}"' -f (Esc-Lucene $album), (Esc-Lucene $artist)
+  $uri = 'https://musicbrainz.org/ws/2/release-group?fmt=json&limit=8&query=' + [uri]::EscapeDataString($query)
+  $res = $null
+  for ($try = 1; $try -le 3 -and -not $res; $try++) {
+    try { $res = Invoke-RestMethod -Uri $uri -Headers @{ 'User-Agent' = $script:MbAgent } -TimeoutSec 30 }
+    catch { if ($try -eq 3) { throw }; Start-Sleep -Seconds (3 * $try) }
+  }
+  Start-Sleep -Milliseconds 1200
+  $na = Norm $album; $nart = Norm $artist
+  $cands = @($res.'release-groups' | Where-Object {
+    $credit = Norm (($_.'artist-credit' | ForEach-Object { $_.name }) -join ' ')
+    $credit -and ($credit -like "*$nart*" -or $nart -like "*$credit*")
+  })
+  $hit = $cands | Where-Object { (Norm $_.title) -eq $na } | Sort-Object { $_.'primary-type' -ne 'Album' } | Select-Object -First 1
+  if (-not $hit) { $hit = $cands | Where-Object { $t = Norm $_.title; $t.StartsWith($na) -or $na.StartsWith($t) } | Select-Object -First 1 }
+  return $hit
+}
+
+# Fixed key order, so old and new entries serialize identically and "did anything change?" is reliable.
+function ConvertTo-MusicEntry($m) {
+  [ordered]@{ key = [string]$m.key; src = [string]$m.src; mbid = [string]$m.mbid; artist = [string]$m.artist
+              title = [string]$m.title; year = [string]$m.year; tracks = [int]$m.tracks; status = 'owned'
+              addedAt = [long]$m.addedAt; mbTried = [long]$m.mbTried }
+}
+function Sort-Music($list) { @($list | Sort-Object { $_.artist }, { $_.year }, { $_.title }) }
+
 # ---- Git ----
 function Get-GitPath {
   $c = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -106,14 +139,15 @@ try {
   if (Test-Path $snapPath) { $snap = Get-Content $snapPath -Raw | ConvertFrom-Json -AsHashtable }
   $items = [System.Collections.ArrayList]@($snap.items)
   $vinyl = @($snap.vinyl)
-  $before = ConvertTo-Json @($items) -Depth 20 -Compress
+  $oldMusic = @(Sort-Music (@($snap.music) | Where-Object { $_ } | ForEach-Object { ConvertTo-MusicEntry $_ }))
+  $before = (ConvertTo-Json @($items) -Depth 20 -Compress) + (ConvertTo-Json @($oldMusic) -Depth 5 -Compress)
 
   $byKey = @{}
   foreach ($i in $items) { $byKey[$i.key] = $i }
 
   # ---- Scan disk ----
   $scanFile = Join-Path ([IO.Path]::GetTempPath()) 'media-tracker-scan.json'
-  & (Join-Path $PSScriptRoot 'Scan-Library.ps1') -MoviesPath $MoviesPath -TvPath $TvPath -Out $scanFile | Out-Null
+  & (Join-Path $PSScriptRoot 'Scan-Library.ps1') -MoviesPath $MoviesPath -TvPath $TvPath -MusicPath $MusicPath -Out $scanFile | Out-Null
   $scan = Get-Content $scanFile -Raw | ConvertFrom-Json -AsHashtable
   Remove-Item $scanFile -ErrorAction SilentlyContinue
   $entries = @($scan.movies | ForEach-Object { $_.type = 'movie'; $_ }) + @($scan.tv | ForEach-Object { $_.type = 'tv'; $_ })
@@ -183,8 +217,42 @@ try {
   }
   if ($skipped) { Log "No TMDB key found: skipped $skipped new titles. Set TMDB_API_KEY (see README)." }
 
+  # ---- Music: mirrors the disk. MusicBrainz matches are remembered per album, so each is looked up once. ----
+  $music = $oldMusic
+  $mbLookups = 0
+  if (Test-Path $MusicPath) {
+    $oldBySrc = @{}
+    foreach ($m in $oldMusic) { $oldBySrc[$m.src] = $m }
+    $retryBefore = [DateTimeOffset]::UtcNow.AddDays(-30).ToUnixTimeMilliseconds()   # re-try unmatched albums monthly
+    $list = [System.Collections.ArrayList]::new()
+    foreach ($a in @($scan.music)) {
+      if (-not $a) { continue }
+      $src = 'music|{0}|{1}' -f (Norm $a.artist), (Norm $a.album)
+      $m = @{ key = ''; src = $src; mbid = ''; artist = $a.artist; title = $a.album; year = $a.year; tracks = $a.tracks; addedAt = NowMs; mbTried = 0 }
+      $old = $oldBySrc[$src]
+      if ($old) { $m.mbid = $old.mbid; $m.addedAt = $old.addedAt; $m.mbTried = $old.mbTried; if (-not $m.year) { $m.year = $old.year } }
+      if (-not $m.mbid -and $a.album -ne 'Singles & loose tracks' -and $m.mbTried -lt $retryBefore -and $mbLookups -lt $MaxMusicLookups) {
+        $mbLookups++
+        try {
+          $hit = Find-MusicBrainz $a.artist $a.album
+          if ($hit) {
+            $m.mbid = [string]$hit.id
+            $d = [string]$hit.'first-release-date'
+            if (-not $m.year -and $d.Length -ge 4) { $m.year = $d.Substring(0, 4) }
+          }
+          $m.mbTried = NowMs
+        } catch { Log "MusicBrainz lookup failed for $($a.artist) - $($a.album): $($_.Exception.Message)" }
+      }
+      $m.key = if ($m.mbid) { "music:$($m.mbid)" } else { "music:local:$src" }
+      [void]$list.Add((ConvertTo-MusicEntry $m))
+    }
+    if ($list.Count -eq 0 -and $oldMusic.Count -gt 0) { Log 'Music folder has no albums right now: keeping the existing music list.' }
+    else { $music = @(Sort-Music $list) }
+    Log "Music: $($music.Count) albums ($mbLookups MusicBrainz lookups)"
+  } else { Log "Music folder not found ($MusicPath): keeping the existing music list." }
+
   # ---- Write snapshot if anything changed ----
-  $after = ConvertTo-Json @($items) -Depth 20 -Compress
+  $after = (ConvertTo-Json @($items) -Depth 20 -Compress) + (ConvertTo-Json @($music) -Depth 5 -Compress)
   if ($before -eq $after) {
     Log "No changes. ($($items.Count) titles)"
     if (-not $DryRun -and -not $NoPush) {   # push any earlier commit that never made it to GitHub
@@ -201,6 +269,7 @@ try {
     updated = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     items   = @($items)
     vinyl   = @($vinyl)
+    music   = @($music)
   }
   New-Item -ItemType Directory -Force (Split-Path $snapPath) | Out-Null
   [IO.File]::WriteAllText($snapPath, (ConvertTo-Json $out -Depth 20 -Compress), [Text.UTF8Encoding]::new($false))

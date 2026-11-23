@@ -8,6 +8,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 let state = load();
 let tab = 'library';
+let music = [];           // digital music library, maintained by scripts/Sync-Site.ps1 (read-only here)
 let viewer = false;       // true when showing the published read-only snapshot
 let sharedUpdated = '';
 const OWNER_FLAG = 'mediatracker.owner';
@@ -153,7 +154,7 @@ function render() {
   const n = missingShows().length;
   $('#missingCount').textContent = n || '';
   const v = $('#view');
-  ({ library: renderLibrary, missing: renderMissing, suggestions: renderSuggestions, vinyl: renderVinyl, settings: renderSettings })[tab](v);
+  ({ library: renderLibrary, missing: renderMissing, suggestions: renderSuggestions, music: renderMusic, vinyl: renderVinyl, settings: renderSettings })[tab](v);
   const note = $('#viewerNote');
   note.hidden = !viewer;
   if (viewer) {
@@ -394,6 +395,48 @@ async function refreshAll(onlyUnmatched) {
   save(); setStatus('Done.'); setTimeout(() => setStatus(''), 2000); render();
 }
 
+/* ---------- Music (digital library; filled in by the scheduled sync, covers from Cover Art Archive) ---------- */
+let musicQuery = '';
+const findMusic = key => music.find(m => m.key === key);
+
+function musicCard(m) {
+  return `<div class="card" data-action="open-music" data-key="${esc(m.key)}">${cover(m)}
+    <div class="meta"><div class="title">${esc(m.title)}</div>
+    <div class="sub">${m.year ? esc(m.year) + ' · ' : ''}${m.tracks} track${m.tracks === 1 ? '' : 's'}</div></div></div>`;
+}
+
+function renderMusic(v) {
+  if (!music.length) {
+    v.innerHTML = `<div class="empty">${location.protocol === 'file:'
+      ? 'The music library is shown on the published site (this local copy can’t load it).'
+      : 'No music yet. It appears after the next sync run.'}</div>`;
+    return;
+  }
+  const list = music.filter(m => !musicQuery || norm(m.artist + ' ' + m.title).includes(norm(musicQuery)));
+  const byArtist = new Map();
+  for (const m of list) (byArtist.get(m.artist) || byArtist.set(m.artist, []).get(m.artist)).push(m);
+  const artists = [...byArtist.keys()].sort((a, b) => a.localeCompare(b));
+  const tracks = music.reduce((n, m) => n + (m.tracks || 0), 0);
+  v.innerHTML = `<div class="toolbar"><input type="search" id="mq" placeholder="Filter artists or albums…" value="${esc(musicQuery)}"></div>
+    <div class="sub" style="margin-bottom:12px">${new Set(music.map(m => m.artist)).size} artists · ${music.length} albums · ${tracks} tracks</div>
+    ${artists.length ? artists.map(a => `<section><h2>${esc(a)} <span class="sub">${byArtist.get(a).length} album${byArtist.get(a).length === 1 ? '' : 's'}</span></h2>
+      <div class="grid">${byArtist.get(a).sort((x, y) => (x.year || '').localeCompare(y.year || '') || x.title.localeCompare(y.title)).map(musicCard).join('')}</div></section>`).join('')
+      : '<div class="empty">Nothing matches.</div>'}`;
+  $('#mq').oninput = e => { musicQuery = e.target.value; const pos = e.target.selectionStart; renderMusic(v); const q = $('#mq'); q.focus(); q.setSelectionRange(pos, pos); };
+}
+
+function openMusic(key) {
+  const m = findMusic(key);
+  if (!m) return;
+  const d = $('#itemDialog');
+  d.innerHTML = `<form method="dialog" class="dlg-head"><h2>${esc(m.title)}</h2><button aria-label="Close">✕</button></form>
+    <div class="detail">${cover(m)}<div>
+      <p><strong>${esc(m.artist)}</strong>${m.year ? ` <span class="sub">(${esc(m.year)})</span>` : ''}</p>
+      <p class="sub">${m.tracks} track${m.tracks === 1 ? '' : 's'} in the digital library</p>
+      ${m.mbid ? `<p><a href="https://musicbrainz.org/release-group/${esc(m.mbid)}" target="_blank" rel="noopener">MusicBrainz ↗</a></p>` : ''}</div></div>`;
+  if (!d.open) d.showModal();
+}
+
 /* ---------- Vinyl (MusicBrainz + Cover Art Archive, no key needed) ---------- */
 const vinylFilters = { q: '', status: 'all', sort: 'artist' };
 const cover = v => v.mbid
@@ -545,7 +588,7 @@ document.addEventListener('click', async e => {
   const t = e.target.closest('[data-action]');
   if (!t) return;
   const { action, key } = t.dataset;
-  if (viewer && !['open', 'open-vinyl', 'own-mode'].includes(action)) return;
+  if (viewer && !['open', 'open-vinyl', 'open-music', 'own-mode'].includes(action)) return;
   const item = key && find(key);
   switch (action) {
     case 'open': openItem(key); break;
@@ -573,6 +616,7 @@ document.addEventListener('click', async e => {
       render(); break;
     }
     case 'open-vinyl': openVinyl(key); break;
+    case 'open-music': openMusic(key); break;
     case 'own-mode':
       try { localStorage.setItem(OWNER_FLAG, '1'); } catch {}
       location.reload(); break;
@@ -629,17 +673,17 @@ async function boot() {
   let owner = false;
   try { owner = localStorage.getItem(OWNER_FLAG) === '1'; } catch {}
   const hasLocal = state.items.length || state.vinyl.length || state.apiKey;
-  if (!hasLocal && !owner) {
-    try {
-      const r = await fetch('shared/library.json', { cache: 'no-cache' });
-      if (r.ok) {
-        const d = await r.json();
-        state = { apiKey: '', items: d.items || [], vinyl: d.vinyl || [], dismissed: [], recCache: {} };
-        sharedUpdated = d.updated || '';
-        viewer = true;
-        document.body.classList.add('viewer');
-      }
-    } catch {}
+  let shared = null;
+  try {
+    const r = await fetch('shared/library.json', { cache: 'no-cache' });
+    if (r.ok) shared = await r.json();
+  } catch {}
+  if (shared) music = shared.music || [];   // the music library is always read from the published snapshot
+  if (shared && !hasLocal && !owner) {
+    state = { apiKey: '', items: shared.items || [], vinyl: shared.vinyl || [], dismissed: [], recCache: {} };
+    sharedUpdated = shared.updated || '';
+    viewer = true;
+    document.body.classList.add('viewer');
   }
   if (!viewer && !state.apiKey) tab = 'settings';
   render();

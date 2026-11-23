@@ -11,6 +11,17 @@ if (-not $src) { Write-Error "No media-tracker-shared*.json in $Downloads. In th
 
 $destDir = Join-Path $PSScriptRoot '..\shared'
 New-Item -ItemType Directory -Force $destDir | Out-Null
-Move-Item -Force $src.FullName (Join-Path $destDir 'library.json')
-Write-Host "Updated $((Resolve-Path (Join-Path $destDir 'library.json')).Path)"
+$dest = Join-Path $destDir 'library.json'
+
+# The app's export doesn't contain the music list (the sync script manages it), so carry it over.
+$music = $null
+if (Test-Path $dest) { try { $music = (Get-Content $dest -Raw | ConvertFrom-Json -AsHashtable).music } catch {} }
+
+Move-Item -Force $src.FullName $dest
+if ($music) {
+  $new = Get-Content $dest -Raw | ConvertFrom-Json -AsHashtable
+  $new.music = $music
+  [IO.File]::WriteAllText((Resolve-Path $dest).Path, (ConvertTo-Json $new -Depth 20 -Compress), [Text.UTF8Encoding]::new($false))
+}
+Write-Host "Updated $((Resolve-Path $dest).Path)"
 Write-Host 'Now open GitHub Desktop, commit, and push.'
