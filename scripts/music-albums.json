@@ -1,0 +1,15 @@
+[
+  { "artist": "30 Seconds to Mars", "track": "ATTACK", "album": "A Beautiful Lie", "year": "2005" },
+  { "artist": "AC_DC", "track": "Highway to Hell", "album": "Highway to Hell", "year": "1979", "displayArtist": "AC/DC" },
+  { "artist": "AC_DC", "track": "You Shook Me All Night Long", "album": "Back in Black", "year": "1980", "displayArtist": "AC/DC" },
+  { "artist": "Aerosmith", "track": "Sweet Emotion", "album": "Toys in the Attic", "year": "1975" },
+  { "artist": "Aerosmith", "track": "Walk This Way", "album": "Toys in the Attic", "year": "1975" },
+  { "artist": "AFI", "track": "The Leaving Pt. II", "album": "Sing the Sorrow", "year": "2003" },
+  { "artist": "Hawthorne Heights", "track": "Ohio Is For Lovers", "album": "The Silence in Black and White", "year": "2004" },
+  { "artist": "HIM", "track": "Rip Out the Wings of a Butterfly", "album": "Dark Light", "year": "2005" },
+  { "artist": "Nazareth", "track": "Hair of the Dog", "album": "Hair of the Dog", "year": "1975" },
+  { "artist": "Trapt", "track": "Stand Up", "album": "Someone in Control", "year": "2005" },
+  { "artist": "The Used", "track": "All That I've Got", "album": "In Love and Death", "year": "2004" },
+  { "artist": "The Used", "track": "I Caught Fire", "album": "In Love and Death", "year": "2004" },
+  { "artist": "Thrice", "track": "Image of the Invisible", "album": "Vheissu", "year": "2005" }
+]

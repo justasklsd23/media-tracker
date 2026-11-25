@@ -2,11 +2,10 @@
 
 A small, dependency-free web app to track the movies and TV shows you own.
 
-- **Library** – movies and shows, owned or on your wishlist
+- **Library** – everything in one place: movies, TV, music and vinyl, owned or on your wishlist. Use the first dropdown to filter by type
 - **Missing seasons** – compares the seasons you own with the seasons TMDB says have aired
 - **Suggestions** – "you might like" picks based on your library, plus missing movies from franchises you already own
-- **Music** – your digital music library (`Artist\Album (Year)\tracks`), grouped by artist, kept up to date automatically by the sync script
-- **Vinyl** – your record collection and wishlist, searched via [MusicBrainz](https://musicbrainz.org/) with covers from the Cover Art Archive (no key needed)
+- **Vinyl** (in the Library, filter "Vinyl") – your record collection and wishlist, searched via [MusicBrainz](https://musicbrainz.org/) with covers from the Cover Art Archive (no key needed)
 - **Private** – your data lives in your browser's localStorage; nothing is uploaded anywhere. Export/import JSON backups.
 
 Metadata and posters come from [TMDB](https://www.themoviedb.org/). This product uses the TMDB API but is not endorsed or certified by TMDB.
@@ -18,7 +17,7 @@ Metadata and posters come from [TMDB](https://www.themoviedb.org/). This product
 3. Add titles with **+ Add**, or import your existing library (below).
 4. For TV shows, open a title and tap the seasons you own. The **Missing seasons** tab does the rest.
 5. On **Suggestions**, press *Generate* to fetch recommendations.
-6. On **Vinyl**, press **+ Add**, search an artist or album, and mark it owned or wishlist. Add notes (pressing, condition) by opening a record.
+6. For vinyl, press **+ Add**, choose *Vinyl record*, search an artist or album, and mark it owned or wishlist. Add notes (pressing, condition) by opening a record.
 
 ## Share it with family and friends (phone app + read-only view)
 

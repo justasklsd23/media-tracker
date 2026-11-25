@@ -154,7 +154,7 @@ function render() {
   const n = missingShows().length;
   $('#missingCount').textContent = n || '';
   const v = $('#view');
-  ({ library: renderLibrary, missing: renderMissing, suggestions: renderSuggestions, music: renderMusic, vinyl: renderVinyl, settings: renderSettings })[tab](v);
+  ({ library: renderLibrary, missing: renderMissing, suggestions: renderSuggestions, settings: renderSettings })[tab](v);
   const note = $('#viewerNote');
   note.hidden = !viewer;
   if (viewer) {
@@ -163,26 +163,39 @@ function render() {
   }
 }
 
+// The library shows everything in one grid: movies, TV, music (from the sync) and vinyl. The type dropdown filters it.
+function libraryEntries() {
+  return [
+    ...state.items.map(i => ({ kind: i.type, title: i.title, hay: i.title, year: i.year, status: i.status, added: i.addedAt, html: itemCard(i) })),
+    ...music.map(m => ({ kind: 'music', title: m.title, hay: m.artist + ' ' + m.title, year: m.year, status: 'owned', added: m.addedAt, html: musicCard(m) })),
+    ...state.vinyl.map(r => ({ kind: 'vinyl', title: r.title, hay: r.artist + ' ' + r.title, year: r.year, status: r.status, added: r.addedAt, html: vinylCard(r) })),
+  ];
+}
+
 function renderLibrary(v) {
-  let items = state.items.filter(i =>
-    (filters.type === 'all' || i.type === filters.type) &&
-    (filters.status === 'all' || i.status === filters.status) &&
-    (!filters.q || norm(i.title).includes(norm(filters.q))));
+  const all = libraryEntries();
+  const items = all.filter(e =>
+    (filters.type === 'all' || e.kind === filters.type) &&
+    (filters.status === 'all' || e.status === filters.status) &&
+    (!filters.q || norm(e.hay).includes(norm(filters.q))));
   const sorters = {
     title: (a, b) => a.title.localeCompare(b.title),
     year: (a, b) => (b.year || '').localeCompare(a.year || ''),
-    added: (a, b) => b.addedAt - a.addedAt,
+    added: (a, b) => (b.added || 0) - (a.added || 0),
   };
   items.sort(sorters[filters.sort]);
   const opt = (val, cur, label) => `<option value="${val}"${val === cur ? ' selected' : ''}>${label}</option>`;
+  const empty = filters.type === 'music' && !music.length
+    ? (location.protocol === 'file:' ? 'The music library is shown on the published site (this local copy can’t load it).' : 'No music yet. It appears after the next sync run.')
+    : all.length ? 'Nothing matches.' : 'Your library is empty. Use “+ Add”, or import a scan in Settings.';
   v.innerHTML = `<div class="toolbar">
     <input type="search" id="fq" placeholder="Filter library…" value="${esc(filters.q)}">
-    <select id="ftype">${opt('all', filters.type, 'Movies & TV')}${opt('movie', filters.type, 'Movies')}${opt('tv', filters.type, 'TV shows')}</select>
+    <select id="ftype">${opt('all', filters.type, 'Everything')}${opt('movie', filters.type, 'Movies')}${opt('tv', filters.type, 'TV shows')}${opt('music', filters.type, 'Music')}${opt('vinyl', filters.type, 'Vinyl')}</select>
     <select id="fstatus">${opt('all', filters.status, 'Owned & wishlist')}${opt('owned', filters.status, 'Owned')}${opt('wishlist', filters.status, 'Wishlist')}</select>
     <select id="fsort">${opt('title', filters.sort, 'Sort: title')}${opt('year', filters.sort, 'Sort: year')}${opt('added', filters.sort, 'Sort: recently added')}</select>
   </div>
-  ${items.length ? `<div class="grid">${items.map(itemCard).join('')}</div>`
-    : `<div class="empty">${state.items.length ? 'Nothing matches.' : 'Your library is empty. Use “+ Add”, or import a scan in Settings.'}</div>`}`;
+  <div class="sub" style="margin-bottom:12px">${items.length} title${items.length === 1 ? '' : 's'}</div>
+  ${items.length ? `<div class="grid">${items.map(e => e.html).join('')}</div>` : `<div class="empty">${empty}</div>`}`;
   $('#fq').oninput = e => { filters.q = e.target.value; const pos = e.target.selectionStart; renderLibrary(v); const f = $('#fq'); f.focus(); f.setSelectionRange(pos, pos); };
   $('#ftype').onchange = e => { filters.type = e.target.value; render(); };
   $('#fstatus').onchange = e => { filters.status = e.target.value; render(); };
@@ -396,33 +409,13 @@ async function refreshAll(onlyUnmatched) {
 }
 
 /* ---------- Music (digital library; filled in by the scheduled sync, covers from Cover Art Archive) ---------- */
-let musicQuery = '';
 const findMusic = key => music.find(m => m.key === key);
 
 function musicCard(m) {
   return `<div class="card" data-action="open-music" data-key="${esc(m.key)}">${cover(m)}
     <div class="meta"><div class="title">${esc(m.title)}</div>
-    <div class="sub">${m.year ? esc(m.year) + ' · ' : ''}${m.tracks} track${m.tracks === 1 ? '' : 's'}</div></div></div>`;
-}
-
-function renderMusic(v) {
-  if (!music.length) {
-    v.innerHTML = `<div class="empty">${location.protocol === 'file:'
-      ? 'The music library is shown on the published site (this local copy can’t load it).'
-      : 'No music yet. It appears after the next sync run.'}</div>`;
-    return;
-  }
-  const list = music.filter(m => !musicQuery || norm(m.artist + ' ' + m.title).includes(norm(musicQuery)));
-  const byArtist = new Map();
-  for (const m of list) (byArtist.get(m.artist) || byArtist.set(m.artist, []).get(m.artist)).push(m);
-  const artists = [...byArtist.keys()].sort((a, b) => a.localeCompare(b));
-  const tracks = music.reduce((n, m) => n + (m.tracks || 0), 0);
-  v.innerHTML = `<div class="toolbar"><input type="search" id="mq" placeholder="Filter artists or albums…" value="${esc(musicQuery)}"></div>
-    <div class="sub" style="margin-bottom:12px">${new Set(music.map(m => m.artist)).size} artists · ${music.length} albums · ${tracks} tracks</div>
-    ${artists.length ? artists.map(a => `<section><h2>${esc(a)} <span class="sub">${byArtist.get(a).length} album${byArtist.get(a).length === 1 ? '' : 's'}</span></h2>
-      <div class="grid">${byArtist.get(a).sort((x, y) => (x.year || '').localeCompare(y.year || '') || x.title.localeCompare(y.title)).map(musicCard).join('')}</div></section>`).join('')
-      : '<div class="empty">Nothing matches.</div>'}`;
-  $('#mq').oninput = e => { musicQuery = e.target.value; const pos = e.target.selectionStart; renderMusic(v); const q = $('#mq'); q.focus(); q.setSelectionRange(pos, pos); };
+    <div class="sub">Music · ${esc(m.artist)}${m.year ? ' · ' + esc(m.year) : ''}</div>
+    <div class="sub">${m.tracks} track${m.tracks === 1 ? '' : 's'}</div></div></div>`;
 }
 
 function openMusic(key) {
@@ -438,7 +431,6 @@ function openMusic(key) {
 }
 
 /* ---------- Vinyl (MusicBrainz + Cover Art Archive, no key needed) ---------- */
-const vinylFilters = { q: '', status: 'all', sort: 'artist' };
 const cover = v => v.mbid
   ? `<img loading="lazy" src="https://coverartarchive.org/release-group/${esc(v.mbid)}/front-250" alt="${esc(v.title)}" data-fallback="${esc(v.title)}">`
   : `<div class="noposter">${esc(v.title)}</div>`;
@@ -457,34 +449,8 @@ document.addEventListener('error', e => {
 function vinylCard(v) {
   return `<div class="card" data-action="open-vinyl" data-key="${esc(v.key)}">${cover(v)}
     <div class="meta"><div class="title">${esc(v.title)}</div>
-    <div class="sub">${esc(v.artist)}${v.year ? ' · ' + esc(v.year) : ''}</div>
+    <div class="sub">Vinyl · ${esc(v.artist)}${v.year ? ' · ' + esc(v.year) : ''}</div>
     <div>${v.status === 'wishlist' ? '<span class="badge">Wishlist</span>' : ''}</div></div></div>`;
-}
-
-function renderVinyl(v) {
-  const f = vinylFilters;
-  const items = state.vinyl.filter(r => (f.status === 'all' || r.status === f.status) &&
-    (!f.q || norm(r.artist + ' ' + r.title).includes(norm(f.q))));
-  const sorters = {
-    artist: (a, b) => a.artist.localeCompare(b.artist) || (a.year || '').localeCompare(b.year || ''),
-    title: (a, b) => a.title.localeCompare(b.title),
-    year: (a, b) => (b.year || '').localeCompare(a.year || ''),
-    added: (a, b) => b.addedAt - a.addedAt,
-  };
-  items.sort(sorters[f.sort]);
-  const opt = (val, cur, label) => `<option value="${val}"${val === cur ? ' selected' : ''}>${label}</option>`;
-  const owned = state.vinyl.filter(r => r.status === 'owned').length;
-  v.innerHTML = `<div class="toolbar">
-    <input type="search" id="vq" placeholder="Filter records…" value="${esc(f.q)}">
-    <select id="vstatus">${opt('all', f.status, 'Owned & wishlist')}${opt('owned', f.status, 'Owned')}${opt('wishlist', f.status, 'Wishlist')}</select>
-    <select id="vsort">${opt('artist', f.sort, 'Sort: artist')}${opt('title', f.sort, 'Sort: title')}${opt('year', f.sort, 'Sort: year')}${opt('added', f.sort, 'Sort: recently added')}</select>
-  </div>
-  <div class="sub" style="margin-bottom:12px">${owned} records owned · ${state.vinyl.length - owned} on wishlist. Use “+ Add” to search MusicBrainz.</div>
-  ${items.length ? `<div class="grid">${items.map(vinylCard).join('')}</div>`
-    : `<div class="empty">${state.vinyl.length ? 'Nothing matches.' : 'No records yet. Use “+ Add” to search for an album.'}</div>`}`;
-  $('#vq').oninput = e => { f.q = e.target.value; const pos = e.target.selectionStart; renderVinyl(v); const q = $('#vq'); q.focus(); q.setSelectionRange(pos, pos); };
-  $('#vstatus').onchange = e => { f.status = e.target.value; render(); };
-  $('#vsort').onchange = e => { f.sort = e.target.value; render(); };
 }
 
 function openVinyl(key) {
@@ -646,12 +612,17 @@ document.addEventListener('click', async e => {
 
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { tab = b.dataset.tab; render(); } });
 let addMode = 'media';
-$('#addBtn').onclick = () => {
-  addMode = tab === 'vinyl' ? 'vinyl' : 'media';
-  $('#addTitle').textContent = addMode === 'vinyl' ? 'Add a vinyl record' : 'Add a movie or show';
-  $('#searchInput').placeholder = addMode === 'vinyl' ? 'Search by artist or album (MusicBrainz)…' : 'Search TMDB…';
+function setAddMode(mode) {
+  addMode = mode;
+  $('#addKind').value = mode;
+  $('#addTitle').textContent = mode === 'vinyl' ? 'Add a vinyl record' : 'Add a movie or show';
+  $('#searchInput').placeholder = mode === 'vinyl' ? 'Search by artist or album (MusicBrainz)…' : 'Search TMDB…';
   $('#searchInput').value = '';
   $('#searchResults').innerHTML = '';
+}
+$('#addKind').onchange = e => { setAddMode(e.target.value); $('#searchInput').focus(); };
+$('#addBtn').onclick = () => {
+  setAddMode(tab === 'library' && filters.type === 'vinyl' ? 'vinyl' : 'media');
   $('#addDialog').showModal();
   $('#searchInput').focus();
 };

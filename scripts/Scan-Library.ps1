@@ -76,6 +76,13 @@ if (Test-Path $MusicPath) {
     Get-ChildItem -LiteralPath $_.FullName -Directory | ForEach-Object {
       $tracks = Count-Audio $_.FullName -Recurse
       if ($tracks -eq 0) { return }
+      if ($_.Name -eq 'Unknown Album') {
+        # Report each track by name, so Sync-Site can match it to a real album via scripts\music-albums.json.
+        Get-ChildItem -LiteralPath $_.FullName -File | Where-Object { $audio -contains $_.Extension.ToLower() } | ForEach-Object {
+          $music += @{ artist = $artist; album = 'Unknown Album'; year = $null; tracks = 1; track = ($_.BaseName -replace '^\d+[\s.\-]+', '') }
+        }
+        return
+      }
       $alb = Split-Name $_.Name
       $music += @{ artist = $artist; album = $alb.title; year = $alb.year; tracks = $tracks }
     }

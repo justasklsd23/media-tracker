@@ -87,17 +87,24 @@ function Merge-Seasons($item, $seasons) {
 
 # ---- MusicBrainz (no key; asks for ~1 request/second and a descriptive User-Agent) ----
 $script:MbAgent = 'MediaTracker/1.0 (https://github.com/justasklsd23/media-tracker)'
-function Esc-Lucene([string]$s) { ([regex]::Replace($s, '[+\-&|!(){}\[\]^"~*?:\\/]', ' ')).Trim() }
+function Esc-Lucene([string]$s) { ([regex]::Replace($s, '[+\-&|!(){}\[\]^"~*?:\\/_]', ' ')).Trim() }
 
 function Find-MusicBrainz([string]$artist, [string]$album) {
-  $query = 'releasegroup:"{0}" AND artist:"{1}"' -f (Esc-Lucene $album), (Esc-Lucene $artist)
-  $uri = 'https://musicbrainz.org/ws/2/release-group?fmt=json&limit=8&query=' + [uri]::EscapeDataString($query)
+  # First an exact-phrase query; if that finds nothing (apostrophes, "?" lost in folder names), the same words in any order.
+  $words = (@((Norm $album) -split ' ') | Where-Object { $_.Length -gt 3 }) -join ' AND '
+  $queries = @('releasegroup:"{0}" AND artist:"{1}"' -f (Esc-Lucene $album), (Esc-Lucene $artist))
+  if ($words) { $queries += 'releasegroup:({0}) AND artist:"{1}"' -f $words, (Esc-Lucene $artist) }
   $res = $null
-  for ($try = 1; $try -le 3 -and -not $res; $try++) {
-    try { $res = Invoke-RestMethod -Uri $uri -Headers @{ 'User-Agent' = $script:MbAgent } -TimeoutSec 30 }
-    catch { if ($try -eq 3) { throw }; Start-Sleep -Seconds (3 * $try) }
+  foreach ($query in $queries) {
+    $uri = 'https://musicbrainz.org/ws/2/release-group?fmt=json&limit=8&query=' + [uri]::EscapeDataString($query)
+    $res = $null
+    for ($try = 1; $try -le 3 -and -not $res; $try++) {
+      try { $res = Invoke-RestMethod -Uri $uri -Headers @{ 'User-Agent' = $script:MbAgent } -TimeoutSec 30 }
+      catch { if ($try -eq 3) { throw }; Start-Sleep -Seconds (3 * $try) }
+    }
+    Start-Sleep -Milliseconds 1200
+    if (@($res.'release-groups').Count -gt 0) { break }
   }
-  Start-Sleep -Milliseconds 1200
   $na = Norm $album; $nart = Norm $artist
   $cands = @($res.'release-groups' | Where-Object {
     $credit = Norm (($_.'artist-credit' | ForEach-Object { $_.name }) -join ' ')
@@ -144,6 +151,12 @@ try {
 
   $byKey = @{}
   foreach ($i in $items) { $byKey[$i.key] = $i }
+
+  # ---- Write album tags into tracks that sit in "Unknown Album" folders (matched by artist + song title) ----
+  if (-not $DryRun) {
+    try { & (Join-Path $PSScriptRoot 'Tag-Music.ps1') -MusicPath $MusicPath | Out-Null }
+    catch { Log "Tag-Music failed: $($_.Exception.Message)" }
+  }
 
   # ---- Scan disk ----
   $scanFile = Join-Path ([IO.Path]::GetTempPath()) 'media-tracker-scan.json'
@@ -225,13 +238,29 @@ try {
     foreach ($m in $oldMusic) { $oldBySrc[$m.src] = $m }
     $retryBefore = [DateTimeOffset]::UtcNow.AddDays(-30).ToUnixTimeMilliseconds()   # re-try unmatched albums monthly
     $list = [System.Collections.ArrayList]::new()
+    # Tracks in "Unknown Album" folders: use scripts\music-albums.json (artist + song -> album) to file them under their real album.
+    $map = @{}
+    $mapFile = Join-Path $PSScriptRoot 'music-albums.json'
+    if (Test-Path $mapFile) { foreach ($e in (Get-Content $mapFile -Raw | ConvertFrom-Json)) { $map["$(Norm $e.artist)|$(Norm $e.track)"] = $e } }
+    $grouped = [ordered]@{}
     foreach ($a in @($scan.music)) {
+      if (-not $a) { continue }
+      $alb = $a.album; $yr = $a.year; $art = $a.artist
+      if ($a.track) {
+        $e = $map["$(Norm $a.artist)|$(Norm $a.track)"]
+        if ($e) { $alb = $e.album; $yr = $e.year; if ($e.displayArtist) { $art = $e.displayArtist } }
+      }
+      $k = "$(Norm $art)|$(Norm $alb)"
+      if ($grouped.Contains($k)) { $grouped[$k].tracks += [int]$a.tracks }
+      else { $grouped[$k] = @{ artist = $art; album = $alb; year = $yr; tracks = [int]$a.tracks } }
+    }
+    foreach ($a in @($grouped.Values)) {
       if (-not $a) { continue }
       $src = 'music|{0}|{1}' -f (Norm $a.artist), (Norm $a.album)
       $m = @{ key = ''; src = $src; mbid = ''; artist = $a.artist; title = $a.album; year = $a.year; tracks = $a.tracks; addedAt = NowMs; mbTried = 0 }
       $old = $oldBySrc[$src]
       if ($old) { $m.mbid = $old.mbid; $m.addedAt = $old.addedAt; $m.mbTried = $old.mbTried; if (-not $m.year) { $m.year = $old.year } }
-      if (-not $m.mbid -and $a.album -ne 'Singles & loose tracks' -and $m.mbTried -lt $retryBefore -and $mbLookups -lt $MaxMusicLookups) {
+      if (-not $m.mbid -and $a.album -notin @('Singles & loose tracks', 'Unknown Album') -and $a.artist -ne 'Unknown Artist' -and $m.mbTried -lt $retryBefore -and $mbLookups -lt $MaxMusicLookups) {
         $mbLookups++
         try {
           $hit = Find-MusicBrainz $a.artist $a.album
